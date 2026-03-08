@@ -128,3 +128,9 @@ th {
   color: var(--muted);
   margin-top: 1rem;
 }
+
+
+.empty {
+  color: var(--muted);
+  margin: 0;
+}

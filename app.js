@@ -5,9 +5,11 @@ const state = {
   drivers: [],
   lapsByDriver: new Map(),
   selectedDrivers: new Set(),
+  selectedYear: new Date().getFullYear(),
 };
 
 const sessionSelect = document.getElementById("sessionSelect");
+const yearSelect = document.getElementById("yearSelect");
 const driverFilterInput = document.getElementById("driverFilter");
 const refreshBtn = document.getElementById("refreshBtn");
 const driverList = document.getElementById("driverList");
@@ -20,90 +22,143 @@ const ctx = lapChart.getContext("2d");
 init();
 
 async function init() {
-  setStatus("Loading race sessions...");
-  await loadSessions();
+  populateYears();
   bindEvents();
-  if (sessionSelect.value) {
-    await loadSessionData(Number(sessionSelect.value));
-  }
+  await loadSessions();
 }
 
 function bindEvents() {
+  yearSelect.addEventListener("change", async (event) => {
+    state.selectedYear = Number(event.target.value);
+    await loadSessions();
+  });
+
   sessionSelect.addEventListener("change", async (event) => {
-    await loadSessionData(Number(event.target.value));
+    const sessionKey = Number(event.target.value);
+    if (Number.isFinite(sessionKey)) {
+      await loadSessionData(sessionKey);
+    }
   });
 
   driverFilterInput.addEventListener("input", renderDriverList);
 
   refreshBtn.addEventListener("click", async () => {
-    if (!sessionSelect.value) return;
+    if (!sessionSelect.value) {
+      await loadSessions();
+      return;
+    }
     await loadSessionData(Number(sessionSelect.value));
   });
 }
 
-async function loadSessions() {
+function populateYears() {
   const thisYear = new Date().getFullYear();
-  const years = [thisYear, thisYear - 1, thisYear - 2];
-
-  let sessions = [];
-  for (const year of years) {
-    const url = `${OPEN_F1_BASE}/sessions?year=${year}&session_type=Race`;
-    const response = await fetch(url);
-    if (!response.ok) continue;
-    sessions = await response.json();
-    if (sessions.length) break;
-  }
-
-  state.sessions = sessions
-    .sort((a, b) => new Date(b.date_start) - new Date(a.date_start))
-    .slice(0, 20);
-
-  sessionSelect.innerHTML = "";
-
-  for (const session of state.sessions) {
+  yearSelect.innerHTML = "";
+  for (let year = thisYear; year >= 2023; year -= 1) {
     const option = document.createElement("option");
-    option.value = session.session_key;
-    option.textContent = `${session.year} ${session.country_name} — ${session.session_name}`;
-    sessionSelect.appendChild(option);
+    option.value = String(year);
+    option.textContent = String(year);
+    if (year === state.selectedYear) option.selected = true;
+    yearSelect.appendChild(option);
   }
+}
 
-  if (state.sessions.length === 0) {
-    setStatus("No race sessions available from API.");
+async function loadSessions() {
+  setStatus(`Loading ${state.selectedYear} race sessions from OpenF1...`);
+  refreshBtn.disabled = true;
+
+  try {
+    const sessions = await fetchJson(buildUrl("sessions", {
+      year: state.selectedYear,
+      session_name: "Race",
+    }));
+
+    state.sessions = sessions.sort((a, b) => new Date(a.date_start) - new Date(b.date_start));
+
+    sessionSelect.innerHTML = "";
+
+    if (!state.sessions.length) {
+      clearSessionData();
+      setStatus(`No race sessions found for ${state.selectedYear}.`);
+      return;
+    }
+
+    for (const session of state.sessions) {
+      const option = document.createElement("option");
+      option.value = session.session_key;
+      option.textContent = `${session.country_name} — ${session.session_name}`;
+      sessionSelect.appendChild(option);
+    }
+
+    const preferredSession =
+      state.sessions.find((session) => session.country_name?.toLowerCase().includes("australia")) ?? state.sessions[0];
+
+    sessionSelect.value = String(preferredSession.session_key);
+    await loadSessionData(preferredSession.session_key);
+  } catch (error) {
+    console.error(error);
+    clearSessionData();
+    setStatus(`Failed to load sessions. ${error.message}`);
+  } finally {
+    refreshBtn.disabled = false;
   }
 }
 
 async function loadSessionData(sessionKey) {
-  try {
-    setStatus("Loading drivers and lap data...");
-    refreshBtn.disabled = true;
+  setStatus("Loading drivers and lap data...");
+  refreshBtn.disabled = true;
 
+  try {
     const [drivers, laps] = await Promise.all([
-      fetchJson(`${OPEN_F1_BASE}/drivers?session_key=${sessionKey}`),
-      fetchJson(`${OPEN_F1_BASE}/laps?session_key=${sessionKey}`),
+      fetchJson(buildUrl("drivers", { session_key: sessionKey })),
+      fetchJson(buildUrl("laps", { session_key: sessionKey })),
     ]);
 
     state.drivers = dedupeDrivers(drivers);
     state.lapsByDriver = groupLapsByDriver(laps);
 
-    const defaultSelected = state.drivers.slice(0, 3).map((d) => d.driver_number);
+    const defaultSelected = state.drivers.slice(0, 4).map((driver) => driver.driver_number);
     state.selectedDrivers = new Set(defaultSelected);
 
     renderDriverList();
     renderLapTable();
     renderLapChart();
 
-    setStatus(`Loaded ${laps.length} laps for ${state.drivers.length} drivers.`);
+    const session = state.sessions.find((item) => item.session_key === sessionKey);
+    const sessionText = session ? `${session.country_name} ${session.year}` : `session ${sessionKey}`;
+    setStatus(`Loaded ${laps.length} laps for ${state.drivers.length} drivers (${sessionText}).`);
   } catch (error) {
     console.error(error);
-    setStatus(`Failed to load data: ${error.message}`);
+    clearSessionData();
+    setStatus(`Failed to load session data. ${error.message}`);
   } finally {
     refreshBtn.disabled = false;
   }
 }
 
+function buildUrl(resource, params = {}) {
+  const url = new URL(`${OPEN_F1_BASE}/${resource}`);
+  for (const [key, value] of Object.entries(params)) {
+    if (value !== undefined && value !== null && value !== "") {
+      url.searchParams.set(key, value);
+    }
+  }
+  return url.toString();
+}
+
+function clearSessionData() {
+  state.drivers = [];
+  state.lapsByDriver = new Map();
+  state.selectedDrivers = new Set();
+  renderDriverList();
+  renderLapTable();
+  renderLapChart();
+}
+
 function dedupeDrivers(drivers) {
   const map = new Map();
   for (const driver of drivers) {
+    if (driver.driver_number == null) continue;
     map.set(driver.driver_number, driver);
   }
   return [...map.values()].sort((a, b) => a.driver_number - b.driver_number);
@@ -112,14 +167,16 @@ function dedupeDrivers(drivers) {
 function groupLapsByDriver(laps) {
   const map = new Map();
   for (const lap of laps) {
-    if (!lap.driver_number || !lap.lap_number || !lap.lap_duration) continue;
+    if (lap.driver_number == null || lap.lap_number == null || lap.lap_duration == null) continue;
     if (!map.has(lap.driver_number)) map.set(lap.driver_number, []);
     map.get(lap.driver_number).push(lap);
   }
+
   for (const [driverNumber, driverLaps] of map.entries()) {
     driverLaps.sort((a, b) => a.lap_number - b.lap_number);
     map.set(driverNumber, driverLaps);
   }
+
   return map;
 }
 
@@ -131,6 +188,14 @@ function renderDriverList() {
     const text = `${driver.full_name} ${driver.team_name} ${driver.driver_number}`.toLowerCase();
     return text.includes(filter);
   });
+
+  if (!visibleDrivers.length) {
+    const empty = document.createElement("p");
+    empty.className = "empty";
+    empty.textContent = "No drivers found.";
+    driverList.appendChild(empty);
+    return;
+  }
 
   for (const driver of visibleDrivers) {
     const label = document.createElement("label");
@@ -162,6 +227,10 @@ function renderLapTable() {
   lapTableHead.innerHTML = "";
   lapTableBody.innerHTML = "";
 
+  if (!selected.length) {
+    return;
+  }
+
   const maxLap = Math.max(
     0,
     ...selected.map((driver) => {
@@ -172,10 +241,12 @@ function renderLapTable() {
 
   const headRow = document.createElement("tr");
   headRow.appendChild(cell("Lap", "th"));
-  selected.forEach((driver) => headRow.appendChild(cell(`#${driver.driver_number} ${driver.last_name}`, "th")));
+  selected.forEach((driver) => {
+    headRow.appendChild(cell(`#${driver.driver_number} ${driver.last_name}`, "th"));
+  });
   lapTableHead.appendChild(headRow);
 
-  for (let lapNo = 1; lapNo <= maxLap; lapNo++) {
+  for (let lapNo = 1; lapNo <= maxLap; lapNo += 1) {
     const row = document.createElement("tr");
     row.appendChild(cell(String(lapNo)));
 
@@ -210,8 +281,8 @@ function renderLapChart() {
     };
   });
 
-  const allX = datasets.flatMap((d) => d.points.map((p) => p.x));
-  const allY = datasets.flatMap((d) => d.points.map((p) => p.y));
+  const allX = datasets.flatMap((dataset) => dataset.points.map((point) => point.x));
+  const allY = datasets.flatMap((dataset) => dataset.points.map((point) => point.y));
 
   if (!allX.length || !allY.length) {
     drawText("No lap data for selected drivers.", width / 2, height / 2);
@@ -298,10 +369,18 @@ function cell(value, type = "td") {
 }
 
 async function fetchJson(url) {
-  const response = await fetch(url);
+  const response = await fetch(url, {
+    method: "GET",
+    headers: {
+      Accept: "application/json",
+    },
+  });
+
   if (!response.ok) {
-    throw new Error(`${response.status} ${response.statusText}`);
+    const bodyText = await response.text();
+    throw new Error(`${response.status} ${response.statusText} for ${url}. ${bodyText.slice(0, 180)}`);
   }
+
   return response.json();
 }
 
