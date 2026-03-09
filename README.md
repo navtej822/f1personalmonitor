@@ -4,7 +4,12 @@ This web app pulls race lap data from the OpenF1 API and lets you:
 
 - view lap times for all drivers in a race session,
 - filter drivers from a searchable list,
-- compare multiple drivers in a table and line chart.
+- compare multiple drivers in a table and line chart,
+- inspect Phase 1 analytics:
+  - average/median race pace cards,
+  - two-driver head-to-head race pace delta,
+  - qualifying best-lap delta,
+  - stint timeline by compound.
 
 ## Run locally
 
@@ -18,5 +23,10 @@ Then open <http://localhost:4173>.
 
 - API base: `https://api.openf1.org/v1`
 - Race sessions are loaded via `/sessions?year=<YEAR>&session_name=Race`
-- Driver and lap data are loaded via `/drivers?session_key=<SESSION_KEY>` and `/laps?session_key=<SESSION_KEY>`
-- The app defaults to the Australian race for the selected year when present.
+- Driver/lap/stint data are loaded via:
+  - `/drivers?session_key=<SESSION_KEY>`
+  - `/laps?session_key=<SESSION_KEY>`
+  - `/stints?session_key=<SESSION_KEY>`
+- Qualifying comparison loads qualifying session within the same meeting via:
+  - `/sessions?meeting_key=<MEETING_KEY>&session_name=Qualifying`
+  - `/laps?session_key=<QUALI_SESSION_KEY>`
