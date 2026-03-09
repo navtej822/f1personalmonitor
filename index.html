@@ -1,0 +1,72 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>F1 Lap Time Monitor</title>
+    <link rel="stylesheet" href="styles.css" />
+  </head>
+  <body>
+    <main class="container">
+      <header>
+        <h1>F1 Lap Time Monitor</h1>
+        <p>Compare lap times across multiple drivers from OpenF1 race sessions.</p>
+      </header>
+
+      <section class="controls card">
+        <div class="field">
+          <label for="yearSelect">Season</label>
+          <select id="yearSelect"></select>
+        </div>
+
+        <div class="field">
+          <label for="sessionSelect">Race session</label>
+          <select id="sessionSelect"></select>
+        </div>
+
+        <div class="field grow">
+          <label for="driverFilter">Filter drivers</label>
+          <input id="driverFilter" type="text" placeholder="Search by name, team, number" />
+        </div>
+
+        <button id="refreshBtn" type="button">Refresh Data</button>
+      </section>
+
+      <section class="card">
+        <h2>Select drivers to compare</h2>
+        <div id="driverList" class="driver-list" aria-live="polite"></div>
+      </section>
+
+      <section class="card">
+        <h2>Phase 1 analytics</h2>
+        <div id="paceGrid" class="metrics-grid"></div>
+        <div id="headToHead" class="mini-panel"></div>
+        <div id="qualiDelta" class="mini-panel"></div>
+      </section>
+
+      <section class="card">
+        <h2>Stint timeline</h2>
+        <div id="stintTimeline" class="timeline" aria-live="polite"></div>
+      </section>
+
+      <section class="card">
+        <h2>Lap time comparison chart</h2>
+        <canvas id="lapChart" width="1100" height="420" role="img" aria-label="Lap times line chart"></canvas>
+      </section>
+
+      <section class="card">
+        <h2>Lap time table</h2>
+        <div class="table-wrap">
+          <table id="lapTable">
+            <thead></thead>
+            <tbody></tbody>
+          </table>
+        </div>
+      </section>
+
+      <p id="status" class="status" aria-live="polite"></p>
+    </main>
+
+    <script type="module" src="app.js"></script>
+  </body>
+</html>
