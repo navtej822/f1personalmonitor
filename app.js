@@ -8,10 +8,13 @@ const state = {
   qualiLapsByDriver: new Map(),
   selectedDrivers: new Set(),
   selectedYear: new Date().getFullYear(),
+  lapRange: { from: 1, to: 1 },
 };
 
 const sessionSelect = document.getElementById("sessionSelect");
 const yearSelect = document.getElementById("yearSelect");
+const lapFromInput = document.getElementById("lapFrom");
+const lapToInput = document.getElementById("lapTo");
 const driverFilterInput = document.getElementById("driverFilter");
 const refreshBtn = document.getElementById("refreshBtn");
 const driverList = document.getElementById("driverList");
@@ -46,6 +49,8 @@ function bindEvents() {
     }
   });
 
+  lapFromInput.addEventListener("change", onLapRangeChange);
+  lapToInput.addEventListener("change", onLapRangeChange);
   driverFilterInput.addEventListener("input", renderDriverList);
 
   refreshBtn.addEventListener("click", async () => {
@@ -55,6 +60,22 @@ function bindEvents() {
     }
     await loadSessionData(Number(sessionSelect.value));
   });
+}
+
+function onLapRangeChange() {
+  const maxLap = getMaxLapInSelection();
+  const from = normalizeLapValue(Number(lapFromInput.value), 1, maxLap);
+  const to = normalizeLapValue(Number(lapToInput.value), 1, maxLap);
+
+  state.lapRange.from = Math.min(from, to);
+  state.lapRange.to = Math.max(from, to);
+
+  lapFromInput.value = String(state.lapRange.from);
+  lapToInput.value = String(state.lapRange.to);
+
+  renderPhase1Analytics();
+  renderLapTable();
+  renderLapChart();
 }
 
 function populateYears() {
@@ -80,7 +101,6 @@ async function loadSessions() {
     }));
 
     state.sessions = sessions.sort((a, b) => new Date(a.date_start) - new Date(b.date_start));
-
     sessionSelect.innerHTML = "";
 
     if (!state.sessions.length) {
@@ -138,6 +158,7 @@ async function loadSessionData(sessionKey) {
     const defaultSelected = state.drivers.slice(0, 4).map((driver) => driver.driver_number);
     state.selectedDrivers = new Set(defaultSelected);
 
+    initializeLapRange();
     renderDriverList();
     renderPhase1Analytics();
     renderLapTable();
@@ -182,6 +203,8 @@ function clearSessionData() {
   state.stintsByDriver = new Map();
   state.qualiLapsByDriver = new Map();
   state.selectedDrivers = new Set();
+  state.lapRange = { from: 1, to: 1 };
+  syncLapRangeInputs();
   renderDriverList();
   renderPhase1Analytics();
   renderStintTimeline();
@@ -228,6 +251,33 @@ function groupStintsByDriver(stints) {
   }
 
   return map;
+}
+
+function initializeLapRange() {
+  const maxLap = getMaxLapInSelection();
+  state.lapRange = { from: 1, to: maxLap };
+  syncLapRangeInputs();
+}
+
+function syncLapRangeInputs() {
+  const maxLap = Math.max(1, getMaxLapInSelection());
+  lapFromInput.min = "1";
+  lapToInput.min = "1";
+  lapFromInput.max = String(maxLap);
+  lapToInput.max = String(maxLap);
+  lapFromInput.value = String(state.lapRange.from);
+  lapToInput.value = String(state.lapRange.to);
+}
+
+function normalizeLapValue(value, min, max) {
+  if (!Number.isFinite(value)) return min;
+  return Math.max(min, Math.min(max, Math.floor(value)));
+}
+
+function getMaxLapInSelection() {
+  const allLaps = [...state.lapsByDriver.values()].flat();
+  const maxLap = Math.max(1, ...allLaps.map((lap) => lap.lap_number ?? 1));
+  return maxLap;
 }
 
 function renderDriverList() {
@@ -308,7 +358,7 @@ function renderPaceMetrics() {
       <p><strong>Median pace:</strong> ${formatMetric(item.median)}</p>
       <p><strong>Average pace:</strong> ${formatMetric(item.avg)}</p>
       <p><strong>Best lap:</strong> ${formatMetric(item.best)}</p>
-      <p><strong>Valid laps:</strong> ${item.count}</p>
+      <p><strong>Valid laps:</strong> ${item.count} (L${state.lapRange.from}-L${state.lapRange.to})</p>
     `;
     paceGrid.appendChild(card);
   }
@@ -335,7 +385,7 @@ function renderHeadToHead() {
     <p><strong>${a.last_name}</strong> median: ${formatMetric(aMedian)}</p>
     <p><strong>${b.last_name}</strong> median: ${formatMetric(bMedian)}</p>
     <p><strong>Delta (${a.last_name} - ${b.last_name}):</strong> ${formatDelta(delta)}</p>
-    <p class="muted">Based on valid race laps (pit in/out laps excluded).</p>
+    <p class="muted">Based on valid race laps from L${state.lapRange.from} to L${state.lapRange.to} (pit in/out excluded).</p>
   `;
 }
 
@@ -437,14 +487,7 @@ function renderLapTable() {
 
   if (!selected.length) return;
 
-  const maxLap = Math.max(
-    0,
-    ...selected.map((driver) => {
-      const laps = state.lapsByDriver.get(driver.driver_number) || [];
-      return laps[laps.length - 1]?.lap_number || 0;
-    })
-  );
-
+  const { from, to } = state.lapRange;
   const headRow = document.createElement("tr");
   headRow.appendChild(cell("Lap", "th"));
   selected.forEach((driver) => {
@@ -452,7 +495,7 @@ function renderLapTable() {
   });
   lapTableHead.appendChild(headRow);
 
-  for (let lapNo = 1; lapNo <= maxLap; lapNo += 1) {
+  for (let lapNo = from; lapNo <= to; lapNo += 1) {
     const row = document.createElement("tr");
     row.appendChild(cell(String(lapNo)));
 
@@ -480,7 +523,7 @@ function renderLapChart() {
   }
 
   const datasets = selected.map((driver) => {
-    const laps = state.lapsByDriver.get(driver.driver_number) || [];
+    const laps = getRaceLapsInRange(driver.driver_number);
     return {
       driver,
       points: laps.map((lap) => ({ x: lap.lap_number, y: lap.lap_duration })),
@@ -491,7 +534,7 @@ function renderLapChart() {
   const allY = datasets.flatMap((dataset) => dataset.points.map((point) => point.y));
 
   if (!allX.length || !allY.length) {
-    drawText("No lap data for selected drivers.", width / 2, height / 2);
+    drawText(`No lap data in selected range L${state.lapRange.from}-L${state.lapRange.to}.`, width / 2, height / 2);
     return;
   }
 
@@ -562,9 +605,13 @@ function getSelectedDrivers() {
   return state.drivers.filter((driver) => state.selectedDrivers.has(driver.driver_number));
 }
 
-function getRacePaceLaps(driverNumber) {
+function getRaceLapsInRange(driverNumber) {
   const laps = state.lapsByDriver.get(driverNumber) || [];
-  return laps
+  return laps.filter((lap) => lap.lap_number >= state.lapRange.from && lap.lap_number <= state.lapRange.to);
+}
+
+function getRacePaceLaps(driverNumber) {
+  return getRaceLapsInRange(driverNumber)
     .filter((lap) => !lap.is_pit_out_lap && !lap.is_pit_in_lap)
     .map((lap) => lap.lap_duration)
     .filter((lapDuration) => Number.isFinite(lapDuration) && lapDuration > 0);

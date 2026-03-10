@@ -5,6 +5,7 @@ This web app pulls race lap data from the OpenF1 API and lets you:
 - view lap times for all drivers in a race session,
 - filter drivers from a searchable list,
 - compare multiple drivers in a table and line chart,
+- compare a specific lap range (for example lap 10 to lap 20) across selected drivers,
 - inspect Phase 1 analytics:
   - average/median race pace cards,
   - two-driver head-to-head race pace delta,

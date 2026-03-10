@@ -51,6 +51,11 @@ body {
   flex: 1;
 }
 
+
+.field-small {
+  min-width: 120px;
+}
+
 label {
   font-size: 0.9rem;
   color: var(--muted);
