@@ -28,6 +28,7 @@ Then open <http://localhost:4173>.
   - `/drivers?session_key=<SESSION_KEY>`
   - `/laps?session_key=<SESSION_KEY>`
   - `/stints?session_key=<SESSION_KEY>`
+- API client includes rate-limit handling (paced requests), retry-on-429 with backoff, and short-lived response caching to reduce duplicate calls
 - Qualifying comparison loads qualifying session within the same meeting via:
   - `/sessions?meeting_key=<MEETING_KEY>&session_name=Qualifying`
   - `/laps?session_key=<QUALI_SESSION_KEY>`

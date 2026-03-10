@@ -1,4 +1,10 @@
 const OPEN_F1_BASE = "https://api.openf1.org/v1";
+const API_DELAY_MS = 360;
+const API_RETRY_DELAYS_MS = [500, 1200, 2000];
+const CACHE_TTL_MS = 30_000;
+
+const responseCache = new Map();
+let lastApiRequestAt = 0;
 
 const state = {
   sessions: [],
@@ -36,6 +42,19 @@ async function init() {
   await loadSessions();
 }
 
+function sleep(ms) {
+  return new Promise((resolve) => setTimeout(resolve, ms));
+}
+
+async function waitForRateLimitSlot() {
+  const now = Date.now();
+  const waitMs = Math.max(0, API_DELAY_MS - (now - lastApiRequestAt));
+  if (waitMs > 0) {
+    await sleep(waitMs);
+  }
+  lastApiRequestAt = Date.now();
+}
+
 function bindEvents() {
   yearSelect.addEventListener("change", async (event) => {
     state.selectedYear = Number(event.target.value);
@@ -55,10 +74,10 @@ function bindEvents() {
 
   refreshBtn.addEventListener("click", async () => {
     if (!sessionSelect.value) {
-      await loadSessions();
+      await loadSessions(true);
       return;
     }
-    await loadSessionData(Number(sessionSelect.value));
+    await loadSessionData(Number(sessionSelect.value), true);
   });
 }
 
@@ -90,7 +109,7 @@ function populateYears() {
   }
 }
 
-async function loadSessions() {
+async function loadSessions(forceRefresh = false) {
   setStatus(`Loading ${state.selectedYear} race sessions from OpenF1...`);
   refreshBtn.disabled = true;
 
@@ -98,7 +117,7 @@ async function loadSessions() {
     const sessions = await fetchJson(buildUrl("sessions", {
       year: state.selectedYear,
       session_name: "Race",
-    }));
+    }), { forceRefresh });
 
     state.sessions = sessions.sort((a, b) => new Date(a.date_start) - new Date(b.date_start));
     sessionSelect.innerHTML = "";
@@ -120,7 +139,7 @@ async function loadSessions() {
       state.sessions.find((session) => session.country_name?.toLowerCase().includes("australia")) ?? state.sessions[0];
 
     sessionSelect.value = String(preferredSession.session_key);
-    await loadSessionData(preferredSession.session_key);
+    await loadSessionData(preferredSession.session_key, forceRefresh);
   } catch (error) {
     console.error(error);
     clearSessionData();
@@ -130,7 +149,7 @@ async function loadSessions() {
   }
 }
 
-async function loadSessionData(sessionKey) {
+async function loadSessionData(sessionKey, forceRefresh = false) {
   setStatus("Loading drivers, laps, stints, and qualifying data...");
   refreshBtn.disabled = true;
 
@@ -138,10 +157,10 @@ async function loadSessionData(sessionKey) {
     const session = state.sessions.find((item) => item.session_key === sessionKey);
 
     const [drivers, laps, stints, qualifyingSession] = await Promise.all([
-      fetchJson(buildUrl("drivers", { session_key: sessionKey })),
-      fetchJson(buildUrl("laps", { session_key: sessionKey })),
-      fetchJson(buildUrl("stints", { session_key: sessionKey })),
-      loadQualifyingSession(session),
+      fetchJson(buildUrl("drivers", { session_key: sessionKey }), { forceRefresh }),
+      fetchJson(buildUrl("laps", { session_key: sessionKey }), { forceRefresh }),
+      fetchJson(buildUrl("stints", { session_key: sessionKey }), { forceRefresh }),
+      loadQualifyingSession(session, forceRefresh),
     ]);
 
     state.drivers = dedupeDrivers(drivers);
@@ -149,7 +168,7 @@ async function loadSessionData(sessionKey) {
     state.stintsByDriver = groupStintsByDriver(stints);
 
     if (qualifyingSession?.session_key) {
-      const qualiLaps = await fetchJson(buildUrl("laps", { session_key: qualifyingSession.session_key }));
+      const qualiLaps = await fetchJson(buildUrl("laps", { session_key: qualifyingSession.session_key }), { forceRefresh });
       state.qualiLapsByDriver = groupLapsByDriver(qualiLaps);
     } else {
       state.qualiLapsByDriver = new Map();
@@ -176,13 +195,13 @@ async function loadSessionData(sessionKey) {
   }
 }
 
-async function loadQualifyingSession(raceSession) {
+async function loadQualifyingSession(raceSession, forceRefresh = false) {
   if (!raceSession?.meeting_key) return null;
 
   const qualiSessions = await fetchJson(buildUrl("sessions", {
     meeting_key: raceSession.meeting_key,
     session_name: "Qualifying",
-  }));
+  }), { forceRefresh });
 
   return qualiSessions[0] ?? null;
 }
@@ -662,20 +681,47 @@ function cell(value, type = "td") {
   return element;
 }
 
-async function fetchJson(url) {
-  const response = await fetch(url, {
-    method: "GET",
-    headers: {
-      Accept: "application/json",
-    },
-  });
+async function fetchJson(url, options = {}) {
+  const { forceRefresh = false } = options;
+  const cached = responseCache.get(url);
+  const now = Date.now();
 
-  if (!response.ok) {
-    const bodyText = await response.text();
-    throw new Error(`${response.status} ${response.statusText} for ${url}. ${bodyText.slice(0, 180)}`);
+  if (!forceRefresh && cached && now - cached.timestamp < CACHE_TTL_MS) {
+    return cached.data;
   }
 
-  return response.json();
+  for (let attempt = 0; attempt <= API_RETRY_DELAYS_MS.length; attempt += 1) {
+    await waitForRateLimitSlot();
+
+    const response = await fetch(url, {
+      method: "GET",
+      headers: {
+        Accept: "application/json",
+      },
+    });
+
+    if (response.ok) {
+      const data = await response.json();
+      responseCache.set(url, { data, timestamp: Date.now() });
+      return data;
+    }
+
+    const bodyText = await response.text();
+    const shouldRetry = response.status === 429 && attempt < API_RETRY_DELAYS_MS.length;
+
+    if (shouldRetry) {
+      const retryAfterSeconds = Number(response.headers.get("retry-after"));
+      const retryMs = Number.isFinite(retryAfterSeconds)
+        ? retryAfterSeconds * 1000
+        : API_RETRY_DELAYS_MS[attempt];
+      await sleep(retryMs);
+      continue;
+    }
+
+    throw new Error(`${response.status} ${response.statusText} for ${url}. ${bodyText.slice(0, 220)}`);
+  }
+
+  throw new Error(`Request failed after retries for ${url}.`);
 }
 
 function setStatus(message) {
